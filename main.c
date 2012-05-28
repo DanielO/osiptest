@@ -9,11 +9,13 @@
 #include <mpatrol.h>
 #endif
 
-
-#include <stdio.h>
 #include <ctype.h>
-#include <stdlib.h>
+#include <err.h>
 #include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sysexits.h>
 #include <unistd.h>
 
 #include <osip2/osip.h>
@@ -31,15 +33,22 @@
 #include <netdb.h>
 #include <assert.h>
 
-//extern osip_fifo *ff;
-static const size_t BUFFSIZE = 1600;
+/* Defines */
+#if 1
+#define debug(fmt, ...) \
+        do { fprintf(stderr, "%s:%d:%s(): " fmt "\n", __FILE__, 	\
+		     __LINE__, __func__, ## __VA_ARGS__); } 		\
+while (0)
+#else
+#define debug(...)
+#endif
 
+#define BUFFSIZE 1600
+
+/* Types */
 typedef struct _udp_transport_layer_t {
   int in_port;
   int in_socket;
-#ifdef OSIP_MT
-  sthread_t *thread;
-#endif
 
   int out_port;
   int out_socket;
@@ -49,15 +58,33 @@ typedef struct _udp_transport_layer_t {
 
 udp_transport_layer_t *_udp_tl;
 
+/* Prototypes */
+int cb_udp_snd_message(osip_transaction_t *tr, osip_message_t *sip, char *host, int port, int out_socket);
+void cb_RcvICTRes(int i, osip_transaction_t *tr, osip_message_t *message);
+void cb_RcvNICTRes(int i, osip_transaction_t *tr, osip_message_t *message);
+void cb_RcvNot(int i, osip_transaction_t *tr, osip_message_t *message);
+void cb_ISTTranKill(int i, osip_transaction_t *osip_transaction);
+void* Notify(void* arg);
+void cb_RcvSub(int i, osip_transaction_t *tran, osip_message_t *msg);
+void cb_RcvRegisterReq(int i, osip_transaction_t *tran, osip_message_t *msg);
+void cb_RcvISTReq(int i, osip_transaction_t *tran, osip_message_t *msg);
+int BuildReq(const osip_message_t *RCVrequest, osip_message_t **SNDrequest);
+int BuildResponse(const osip_message_t *request, osip_message_t **response);
+void ProcessNewReq(osip_t* osip, osip_event_t *evt);
+void* TransportFun(void* arg);
+int InitNet(void);
+void SetCallbacks(osip_t *osip);
+
+
+/* Code */
 int cb_udp_snd_message(osip_transaction_t *tr, osip_message_t *sip, char *host, int port, int out_socket)
 {
-  printf("cb_udp_snd_message\n");
+  debug("cb_udp_snd_message");
   int num = 0;
   int i;
   char* message;
   
   struct sockaddr_in addr;
-  unsigned long int  one_inet_addr;
   int sock;
   size_t bufLen;
   
@@ -95,46 +122,46 @@ int cb_udp_snd_message(osip_transaction_t *tr, osip_message_t *sip, char *host, 
 	}
     }
   
-  printf("\n<--- Transmitting to %s:%s --->\n", via->host, via->port);
+  debug("<--- Transmitting to %s:%s --->", via->host, via->port);
   //osip_message_to_str(response, &buf, &bufLen);
-  printf("%s\n", message);
+  debug("%s", message);
     
   if (strncmp(message, "INVITE", 6)==0)
     {
       num++;
-      fprintf(stdout, "number of message sent: %i\n", num);
+      debug("number of message sent: %i", num);
     }
 
   OSIP_TRACE(osip_trace(__FILE__,__LINE__,OSIP_INFO2, NULL, "SND UDP MESSAGE.\n"));
-  printf("end cb_udp_snd_message\n");
+  debug("end cb_udp_snd_message");
   return 0;
 }
 
 void cb_RcvICTRes(int i, osip_transaction_t *tr, osip_message_t *message)
 {
-        printf("cb_RcvICTRes fired\n");
+        debug("cb_RcvICTRes fired");
 }
 
 void cb_RcvNICTRes(int i, osip_transaction_t *tr, osip_message_t *message)
 {
-        printf("cb_RcvNICTRes fired\n");
+        debug("cb_RcvNICTRes fired");
 }
 
 void cb_RcvNot(int i, osip_transaction_t *tr, osip_message_t *message)
 {
     //OSIP_TRACE (osip_trace(__FILE__, __LINE__, OSIP_INFO1, NULL, "psp_core_cb_rcvregister!\n"));   
     //psp_core_event_add_sfp_inc_traffic(tr);
-    printf("NOTIFY SIP message received\n");
+    debug("NOTIFY SIP message received");
 }
 
 void cb_ISTTranKill(int i, osip_transaction_t *osip_transaction)
 {
-        printf("cb_ISTTranKill fired\n");
+        debug("cb_ISTTranKill fired");
 }
 
 void* Notify(void* arg)
 {       
-    printf("Notify\n");
+    debug("Notify");
         osip_transaction_t *tran = (osip_transaction_t*)arg;
         
         osip_message_t *response = NULL;        
@@ -180,7 +207,7 @@ a=fmtp:101 0-11\r\n";
 }
 
 void cb_RcvSub(int i, osip_transaction_t *tran, osip_message_t *msg){
-    printf("SUBSCRIBE SIP message received\n");
+    debug("SUBSCRIBE SIP message received");
 }
 
 void cb_RcvRegisterReq(int i, osip_transaction_t *tran, osip_message_t *msg){
@@ -190,9 +217,9 @@ void cb_RcvRegisterReq(int i, osip_transaction_t *tran, osip_message_t *msg){
     osip_message_t *response = NULL;   
     osip_event_t *evt = NULL;
     
-    printf("\n<--- Received from %s:%s --->\n", via->host, via->port);
+    debug("<--- Received from %s:%s --->", via->host, via->port);
     osip_message_to_str(msg, &buf, &bufLen);
-    printf("%s\n", buf);
+    debug("%s", buf);
     
     BuildResponse(msg, &response);
     osip_message_set_status_code(response, SIP_TRYING);
@@ -215,7 +242,7 @@ void cb_RcvRegisterReq(int i, osip_transaction_t *tran, osip_message_t *msg){
     osip_message_set_reason_phrase(response, osip_strdup("OK"));
     osip_transaction_add_event(tran, evt);
     
-    printf("end RcvRegisterReq\n");
+    debug("end RcvRegisterReq");
 }
 
 
@@ -227,9 +254,9 @@ void cb_RcvISTReq(int i, osip_transaction_t *tran, osip_message_t *msg)
     osip_message_t *response = NULL;        
     osip_event_t *evt = NULL;
     
-    printf("<--- INVITE SIP message received from %s:%s --->\n",  via->host, via->port);
+    debug("<--- INVITE SIP message received from %s:%s --->",  via->host, via->port);
     osip_message_to_str(msg, &buf, &bufLen);
-    printf("%s\n", buf);
+    debug("%s", buf);
         
 
         BuildResponse(msg, &response); //trying
@@ -254,7 +281,7 @@ void cb_RcvISTReq(int i, osip_transaction_t *tran, osip_message_t *msg)
 }
 
 int BuildReq(const osip_message_t *RCVrequest, osip_message_t **SNDrequest){
-    printf("BuildReq\n");
+    debug("BuildReq");
     osip_via_t * viaReq = (osip_via_t *) osip_list_get (&RCVrequest->vias, 0);
         osip_message_t *msg = NULL;
         osip_message_init(&msg);
@@ -317,13 +344,13 @@ int BuildReq(const osip_message_t *RCVrequest, osip_message_t **SNDrequest){
         osip_message_set_supported(msg, "replaces");
         
         *SNDrequest = msg;
-        printf("end BuildReq\n");
+        debug("end BuildReq");
         return 0;
 }
 
 int BuildResponse(const osip_message_t *request, osip_message_t **response)
 {
-    printf("BuildResponse\n");
+    debug("BuildResponse");
         osip_message_t *msg = NULL;
         osip_message_init(&msg);
 
@@ -357,38 +384,42 @@ int BuildResponse(const osip_message_t *request, osip_message_t **response)
         osip_message_set_user_agent(msg, osip_strdup("Soufiane/1.0.0 PBX"));
         *response = msg;
         
-        printf("end BuildResponse\n");
+        debug("end BuildResponse");
         
         return 0;
 }
 
 void ProcessNewReq(osip_t* osip, osip_event_t *evt)
 {
-    printf("ProcessNewReq\n");
+    debug("ProcessNewReq");
         osip_transaction_t *tran;
-        int g_sock;
+        //int g_sock;
         osip_transaction_init(&tran, NIST, osip, evt->sip);
-        osip_transaction_set_in_socket (tran, g_sock);
+        //osip_transaction_set_in_socket (tran, g_sock);
         //osip_transaction_set_out_socket (tran, g_sock);
         osip_transaction_set_your_instance(tran, osip);// store osip in transaction for later usage
         osip_transaction_add_event(tran, evt);
-        printf("end ProcessNewReq\n");
+        debug("end ProcessNewReq");
 }
 
 void* TransportFun(void* arg)
 {
-    printf("TransportFun\n");
-        int rc;
-        osip_t* osip = (osip_t*)arg;
-                
-        printf("Initialize network\n");
-        int g_sock = InitNet();     
+        int		rc;
+        osip_t		*osip;
+        int		g_sock;
+        char		buf[BUFFSIZE];
+	struct sockaddr	from;
+	socklen_t	addrSize;
+	osip = (osip_t*)arg;
+
+	g_sock = InitNet();
         assert(0 < g_sock);
-        char buf[BUFFSIZE];
+
+	debug("TransportFun");
+
         while(1)
         {
-                struct sockaddr from;
-                int addrSize = sizeof(struct sockaddr);
+		
                 int len = recvfrom(g_sock, buf, BUFFSIZE, 0, &from, &addrSize);
                 if(len < 1){
                     continue;
@@ -398,33 +429,36 @@ void* TransportFun(void* arg)
                 rc = osip_find_transaction_and_add_event(osip, evt);
                 if(0 != rc)
                 {
-                        printf("this event has no transaction, create a new one.\n");
+                        debug("this event has no transaction, create a new one.");
                         ProcessNewReq(osip, evt);
                 }
-                printf("******** this is the osip after: %d, method: %s, tr id: %d\n\n", osip->osip_nist_transactions.nb_elt, evt->sip->sip_method, evt->transactionid);
+                debug("******** this is the osip after: %d, method: %s, tr id: %d", osip->osip_nist_transactions.nb_elt, evt->sip->sip_method, evt->transactionid);
         }
         return NULL;
 }
 
-int InitNet(){
-    printf("InitNet\n");
+int InitNet(void){
+    debug("InitNet");
     struct sockaddr_in param;
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int sock;
+
+    if ((sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
+	err(EX_OSERR, "socket");
     
     param.sin_family = AF_INET;
     param.sin_port = htons(5040);
     param.sin_addr.s_addr = inet_addr("0.0.0.0");
     
-    if( bind (sock, (struct sockaddr*)&param, sizeof(param)) == -1){
-        perror("bind");
-    }
-    printf("Network ready\n");
+    if (bind(sock, (struct sockaddr*)&param, sizeof(param)) == -1)
+        err(EX_OSERR, "bind");
+
+    debug("Network ready");
     return(sock);
 }
 
 void SetCallbacks(osip_t *osip)
 {
-    printf("SetCallbacks\n");
+    debug("SetCallbacks");
     osip_set_cb_send_message(osip, &cb_udp_snd_message);
     osip_set_message_callback(osip, OSIP_IST_INVITE_RECEIVED, &cb_RcvISTReq);
     osip_set_message_callback(osip, OSIP_IST_INVITE_RECEIVED_AGAIN, &cb_RcvISTReq);
@@ -437,26 +471,36 @@ void SetCallbacks(osip_t *osip)
 }
 
 int main(int argc, char** argv) {
+    struct timeval	sleept;
+    osip_t		*osip;
+
+    osip = NULL;
+
     /* initializing the parser and the state machine */
-    osip_t *osip=NULL;
     if (osip_init(&osip) != 0){
-        return -1;
+	debug("Unable to init SIP library\n");
+	exit(1);
     }
     
     /* Setting the callback functions */
     SetCallbacks(osip);
     
     osip_thread_create(0, TransportFun, osip); 
-        while(0 == 0)
-        {               
-                osip_ict_execute(osip);
-                osip_ist_execute(osip);
-                osip_nict_execute(osip);
-                osip_nist_execute(osip);
-                osip_timers_ict_execute(osip);
-                osip_timers_ist_execute(osip);
-                osip_timers_nict_execute(osip);
-                osip_timers_nist_execute(osip);
-        }
+    while(1)
+    {
+	osip_ict_execute(osip);
+	osip_ist_execute(osip);
+	osip_nict_execute(osip);
+	osip_nist_execute(osip);
+	osip_timers_ict_execute(osip);
+	osip_timers_ist_execute(osip);
+	osip_timers_nict_execute(osip);
+	osip_timers_nist_execute(osip);
+	osip_timers_gettimeout(osip, &sleept);
+#if 0
+	debug("Sleeping for %d seconds %d msec", (int)sleept.tv_sec, sleept.tv_usec / 1000);
+	usleep(sleept.tv_sec * 1000000 + sleept.tv_usec); 	
+#endif
+    }
     return (EXIT_SUCCESS);
 }
