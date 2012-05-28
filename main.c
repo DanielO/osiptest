@@ -9,29 +9,27 @@
 #include <mpatrol.h>
 #endif
 
+#include <arpa/inet.h>
+#include <assert.h>
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sysexits.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <osip2/osip.h>
 #include <osip2/osip_fifo.h>
-//#include <osipparser2/osip_port.h>
-#include <osip2/osip_mt.h>
 #include <osipparser2/osip_const.h>
-//#include <osipparser2/sdp_message.h>
-
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <assert.h>
 
 /* Defines */
 #if 1
@@ -65,14 +63,14 @@ void	cb_RcvICTRes(int i, osip_transaction_t *tr, osip_message_t *message);
 void	cb_RcvNICTRes(int i, osip_transaction_t *tr, osip_message_t *message);
 void	cb_RcvNot(int i, osip_transaction_t *tr, osip_message_t *message);
 void	cb_ISTTranKill(int i, osip_transaction_t *osip_transaction);
-void	 Notify(void* arg);
+void	*Notify(void* arg);
 void	cb_RcvSub(int i, osip_transaction_t *tran, osip_message_t *msg);
 void	cb_RcvRegisterReq(int i, osip_transaction_t *tran, osip_message_t *msg);
 void	cb_RcvISTReq(int i, osip_transaction_t *tran, osip_message_t *msg);
 int	BuildReq(const osip_message_t *RCVrequest, osip_message_t **SNDrequest);
 int	BuildResponse(const osip_message_t *request, osip_message_t **response);
-void	ProcessNewReq(osip_t* osip, osip_event_t *evt);
-void	*TransportFun(void* arg);
+void	ProcessNewReq(osip_t *osip, osip_event_t *evt);
+void	TransportProcess(osip_t *osip, int g_sock);
 int	InitNet(void);
 void	SetCallbacks(osip_t *osip);
 
@@ -160,7 +158,7 @@ Notify(void* arg) {
     osip_transaction_t	*tran = (osip_transaction_t*)arg;
     osip_message_t	*response = NULL;        
     osip_event_t	*evt = NULL;
-    char		act, mime, dsp;
+    char		act, *sdp, *mime;
     
     debug("Notify");
 
@@ -209,7 +207,7 @@ cb_RcvSub(int i, osip_transaction_t *tran, osip_message_t *msg) {
 
 void
 cb_RcvRegisterReq(int i, osip_transaction_t *tran, osip_message_t *msg) {
-    osip_via_t		*via
+    osip_via_t		*via;
     char		*buf;
     size_t		bufLen;
     osip_message_t	*response = NULL;   
@@ -247,7 +245,7 @@ cb_RcvRegisterReq(int i, osip_transaction_t *tran, osip_message_t *msg) {
 
 void
 cb_RcvISTReq(int i, osip_transaction_t *tran, osip_message_t *msg) {       
-    osip_via_t		*via
+    osip_via_t		*via;
     char		*buf;
     size_t		bufLen;
     osip_message_t	*response = NULL;        
@@ -275,8 +273,6 @@ cb_RcvISTReq(int i, osip_transaction_t *tran, osip_message_t *msg) {
     evt = osip_new_outgoing_sipmessage(response);   
     osip_message_set_reason_phrase(response, osip_strdup("Ringing\n"));
     osip_transaction_add_event(tran, evt);
-
-    //osip_thread_create(0, Notify, tran); // start another thread to notify user the incoming call
 }
 
 int
@@ -405,50 +401,64 @@ ProcessNewReq(osip_t *osip, osip_event_t *evt) {
     debug("end ProcessNewReq");
 }
 
-void *
-TransportFun(void *arg) {
+void
+TransportProcess(osip_t *osip, int g_sock) {
     int			rc;
-    osip_t		*osip;
-    int			g_sock, len;
+    int			len;
     char		buf[BUFFSIZE];
     struct sockaddr	from;
     socklen_t		addrSize;
     osip_event_t	*evt;
     
-    osip = (osip_t*)arg;
+    debug("TransportProcess");
 
-    g_sock = InitNet();
-    assert(0 < g_sock);
-
-    debug("TransportFun");
-
+    /* Loop processing packets */
     while(1) {
-		
 	len = recvfrom(g_sock, buf, BUFFSIZE, 0, &from, &addrSize);
-	if(len < 1){
+	if (len == -1) {
+	    /* Nothing to do */
+	    if (errno == EAGAIN)
+		return;
+	    else
+		debug("Error reading from socket: %s", strerror(errno));
+	}
+	
+	if (len == 0) {
+	    debug("Runt packet");
 	    continue;
 	}
+
 	buf[len] = 0;
-	evt = osip_parse(buf, len);
+	if ((evt = osip_parse(buf, len)) == NULL) {
+	    debug("Unable to parse buffer");
+	    continue;
+	}
+	
 	rc = osip_find_transaction_and_add_event(osip, evt);
 	if(0 != rc) {
-	    debug("this event has no transaction, create a new one.");
+	    debug("this event has no transaction, creating a new one.");
 	    ProcessNewReq(osip, evt);
 	}
 	debug("******** this is the osip after: %d, method: %s, tr id: %d", osip->osip_nist_transactions.nb_elt, evt->sip->sip_method, evt->transactionid);
     }
-    return NULL;
+    return;
 }
 
 int
 InitNet(void){
     struct sockaddr_in	param;
-    int			sock;
+    int			sock, fl;
 
     debug("InitNet");
 
     if ((sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
 	err(EX_OSERR, "socket");
+    if ((fl = fcntl(sock, F_GETFL, NULL)) == -1)
+	err(EX_OSERR, "fcntl(.., F_GETFL)");
+
+    fl |= O_NONBLOCK;
+    if ((fl = fcntl(sock, F_SETFL, fl)) == -1)
+	err(EX_OSERR, "fcntl(.., F_SETFL)");
     
     param.sin_family = AF_INET;
     param.sin_port = htons(5040);
@@ -475,23 +485,25 @@ SetCallbacks(osip_t *osip) {
     osip_set_kill_transaction_callback(osip, OSIP_IST_KILL_TRANSACTION, &cb_ISTTranKill);
 }
 
-int main(int argc, char** argv) {
+int
+main(int argc, char** argv) {
     struct timeval	sleept;
-    osip_t		*osip;
+    osip_t		*osip = NULL;
+    int			g_sock, rc;
+    fd_set		rdset, erset;
 
-    osip = NULL;
-
-    /* initializing the parser and the state machine */
+    /* Initialise the parser and the state machine */
     if (osip_init(&osip) != 0) {
 	debug("Unable to init SIP library\n");
 	exit(1);
     }
     
-    /* Setting the callback functions */
+    g_sock = InitNet();
+    
+    /* Set the callback functions */
     SetCallbacks(osip);
     
-    osip_thread_create(0, TransportFun, osip); 
-    while(1) {
+    while (1) {
 	osip_ict_execute(osip);
 	osip_ist_execute(osip);
 	osip_nict_execute(osip);
@@ -501,10 +513,32 @@ int main(int argc, char** argv) {
 	osip_timers_nict_execute(osip);
 	osip_timers_nist_execute(osip);
 	osip_timers_gettimeout(osip, &sleept);
-#if 0
-	debug("Sleeping for %d seconds %d msec", (int)sleept.tv_sec, sleept.tv_usec / 1000);
-	usleep(sleept.tv_sec * 1000000 + sleept.tv_usec); 	
-#endif
+
+	FD_ZERO(&rdset);
+	FD_ZERO(&erset);
+	FD_SET(g_sock, &rdset);
+	FD_SET(g_sock, &erset);
+	debug("Waiting up to %d seconds %d msec for a packet", (int)sleept.tv_sec, sleept.tv_usec / 1000);
+	rc = select(g_sock + 1, &rdset, NULL, &erset, &sleept);
+	if (rc == -1)
+	    err(EX_OSERR, "select");
+
+	/* Timed out */
+	if (rc == 0) {
+	    debug("Timed out");
+	    continue;
+	}
+	
+	/* Ready for read */
+	if (FD_ISSET(g_sock, &rdset))
+	    TransportProcess(osip, g_sock);
+
+	/* Socket error ? */
+	if (FD_ISSET(g_sock, &erset))
+	    debug("Error on socket");
     }
+
+    close(g_sock);
+    
     return (EXIT_SUCCESS);
 }
