@@ -3,17 +3,20 @@ OSIP_LIBS=	$(shell pkg-config --libs libosip2)
 
 DEFS=
 
+PROG=	osiptest
 SRCS=	main.c
 OBJS=	$(SRCS:.c=.o)
 
-CFLAGS=		$(DEFS) $(OSIP_CFLAGS) -Wall
+CFLAGS=		$(DEFS) $(OSIP_CFLAGS) -Wall -g -O0
 LDFLAGS=	$(OSIP_LIBS)
 
-all: osiptest
+all: $(PROG)
 
 %.o:	%.c
 	$(CC) $(CFLAGS) -c $<
 
-osiptest: $(OBJS)
+$(PROG): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $@
 
+clean:
+	$(RM) $(OBJS) $(PROG)
